@@ -1,0 +1,39 @@
+# --- secrets: never commit these ---
+.env
+*.env
+!.env.example
+backend/.env
+frontend/.env
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# --- node ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-error.log*
+
+# --- uploads and model artefacts ---
+backend/uploads/*
+!backend/uploads/.gitkeep
+ml/models/*.pth
+ml/models/metrics.json
+ml/models/history.json
+ml/dataset/*
+!ml/dataset/README.md
+
+# --- editors / os ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.d

@@ -1,0 +1,16 @@
+from app.models.entities import (  # noqa: F401
+    Collector,
+    Credit,
+    CreditTransaction,
+    EmailLog,
+    Hospital,
+    HouseholdReturn,
+    ModelVersion,
+    Notification,
+    PickupRequest,
+    PickupStatusHistory,
+    QuarantineEvent,
+    Sequence,
+    User,
+    WasteEvent,
+)

@@ -1,0 +1,20 @@
+# Use Python 3.11 or 3.12 for Windows installs.
+# Python 3.14 currently fails because the pinned Pillow and pydantic-core builds
+# require native toolchains or wheels that are not available in this environment.
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+SQLAlchemy==2.0.40
+PyMySQL==1.1.1
+cryptography==44.0.2
+alembic==1.15.2
+pydantic==2.11.3
+pydantic-settings==2.8.1
+python-jose[cryptography]==3.4.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.3.0
+python-multipart==0.0.20
+Pillow==11.2.1
+email-validator==2.2.0
+# Optional: install only when you have a trained checkpoint.
+# torch==2.6.0
+# torchvision==0.21.0
