@@ -1,0 +1,86 @@
+{
+  "evaluated_at": "2026-09-18T21:19:24.938689",
+  "checkpoint": "C:\\Users\\abhi1\\Downloads\\files\\medreturn\\medreturn\\ml\\models\\pilot_pbw\\model.pth",
+  "test_images": 163,
+  "classes": [
+    "General",
+    "Glass and Sharps",
+    "Infectious",
+    "Pharmaceutical",
+    "Plastic Recyclable"
+  ],
+  "accuracy": 0.9018,
+  "macro_precision": 0.8627,
+  "macro_recall": 0.9153,
+  "macro_f1": 0.8806,
+  "weighted_f1": 0.9019,
+  "per_class": {
+    "General": {
+      "precision": 0.9062,
+      "recall": 0.7838,
+      "f1": 0.8406,
+      "support": 37
+    },
+    "Glass and Sharps": {
+      "precision": 0.8889,
+      "recall": 0.9655,
+      "f1": 0.9256,
+      "support": 58
+    },
+    "Infectious": {
+      "precision": 0.9767,
+      "recall": 0.8936,
+      "f1": 0.9333,
+      "support": 47
+    },
+    "Pharmaceutical": {
+      "precision": 0.6667,
+      "recall": 1.0,
+      "f1": 0.8,
+      "support": 6
+    },
+    "Plastic Recyclable": {
+      "precision": 0.875,
+      "recall": 0.9333,
+      "f1": 0.9032,
+      "support": 15
+    }
+  },
+  "confusion_matrix": [
+    [
+      29,
+      4,
+      0,
+      3,
+      1
+    ],
+    [
+      0,
+      56,
+      1,
+      0,
+      1
+    ],
+    [
+      3,
+      2,
+      42,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      6,
+      0
+    ],
+    [
+      0,
+      1,
+      0,
+      0,
+      14
+    ]
+  ]
+}

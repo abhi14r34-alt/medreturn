@@ -31,6 +31,8 @@ ml/models/metrics.json
 ml/models/history.json
 ml/dataset/*
 !ml/dataset/README.md
+ml/sources/
+ml/dataset_pilot_pbw/
 
 # --- editors / os ---
 .vscode/

@@ -15,7 +15,10 @@ from app.core.constants import ALLOWED_IMAGE_TYPES
 
 
 def _validate(upload: UploadFile, data: bytes) -> None:
-    if upload.content_type not in ALLOWED_IMAGE_TYPES:
+    ext = os.path.splitext(upload.filename or "")[1].lower()
+    is_valid_ext = ext in {".jpg", ".jpeg", ".png", ".webp"}
+    is_valid_type = upload.content_type in ALLOWED_IMAGE_TYPES or (upload.content_type and upload.content_type.startswith("image/"))
+    if not (is_valid_type or is_valid_ext):
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="Upload a JPG, PNG or WebP image.",

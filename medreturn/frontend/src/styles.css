@@ -115,6 +115,9 @@ textarea{min-height:76px;resize:vertical}
   border-radius:9px;font-size:13.5px;margin-bottom:12px}
 .camera-panel{margin-top:14px;padding:10px;background:var(--bg2);border:1px solid var(--line);border-radius:10px}
 .camera-video{display:block;width:100%;max-height:360px;object-fit:cover;border-radius:7px;background:#05090d}
+.manual-details{display:grid;gap:6px;margin:16px 0;padding:12px;background:var(--bg2);border:1px solid var(--line);border-radius:9px}
+.manual-details h4{font-size:13px;margin-bottom:3px}
+.manual-details label{margin-top:3px}
 :root[data-theme="light"] .top{background:rgba(243,247,250,.9)}
 :root[data-theme="light"] .btn:hover{background:#DCE8F0;border-color:#AFC2D0}
 :root[data-theme="light"] .btn.pri{color:#FFFFFF}

@@ -55,7 +55,8 @@ def main() -> None:
               "evaluating; the metrics would be meaningless.", file=sys.stderr)
         raise SystemExit(2)
 
-    model = build_model(config.architecture, len(classes), pretrained=False)
+    architecture = checkpoint.get("architecture", config.architecture)
+    model = build_model(architecture, len(classes), pretrained=False)
     model.load_state_dict(checkpoint["state_dict"])
     model.to(device).eval()
 

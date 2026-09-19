@@ -185,6 +185,7 @@ uvicorn app.main:app --reload --port 8000
 Swagger UI: <http://localhost:8000/docs>
 Health check: <http://localhost:8000/api/health>
 
+
 ### 3. Frontend
 
 ```bash

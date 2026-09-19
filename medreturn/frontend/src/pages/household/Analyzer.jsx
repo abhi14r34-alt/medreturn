@@ -8,18 +8,22 @@ const MAX_MB = 5
 
 export default function Analyzer() {
   const [preview, setPreview] = useState(null)
+  const [details, setDetails] = useState({ item_name: '', expiry_date: '', batch_number: '' })
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
 
-  const onFile = async (event) => {
-    const file = event?.target ? event.target.files?.[0] : event
+  const [currentFile, setCurrentFile] = useState(null)
+
+  const onFile = async (event, overrideDetails = null) => {
+    const file = event?.target ? event.target.files?.[0] : (event instanceof File ? event : currentFile)
     if (!file) return
 
     setError(null)
     setResult(null)
 
-    if (!file.type.startsWith('image/')) {
+    const isImg = (file.type && file.type.startsWith('image/')) || /\.(jpe?g|png|webp|gif|bmp)$/i.test(file.name || '')
+    if (!isImg) {
       setError(new Error('That file is not an image. Upload a JPG or PNG.'))
       return
     }
@@ -28,10 +32,11 @@ export default function Analyzer() {
       return
     }
 
+    setCurrentFile(file)
     setPreview(URL.createObjectURL(file))
     setBusy(true)
     try {
-      setResult(await api.analyze(file))
+      setResult(await api.analyze(file, overrideDetails || details))
     } catch (err) {
       setError(err)
     } finally {
@@ -45,7 +50,7 @@ export default function Analyzer() {
     <>
       <PageHeader
         title="Medicine analyzer"
-        subtitle="Photograph the pack. The model suggests a category and a confidence score; anything unclear is sent for human review."
+        subtitle="Photograph the pack. The trained model returns one of its learned labels; anything unclear is sent for human review."
       />
 
       <div className="split">
@@ -55,6 +60,26 @@ export default function Analyzer() {
             {result?.is_simulated && <DemoTag />}
           </div>
           <ImageCapture onCapture={onFile} onUpload={onFile} disabled={busy} />
+             <div className="manual-details">
+               <h4>Enter details manually (optional)</h4>
+               <label htmlFor="medicine-name">Medicine or item name</label>
+               <input id="medicine-name" value={details.item_name}
+                 onChange={(e) => setDetails({ ...details, item_name: e.target.value })}
+                 placeholder="e.g. Dolo-650" disabled={busy} />
+               <label htmlFor="medicine-expiry">Expiry date</label>
+               <input id="medicine-expiry" value={details.expiry_date}
+                 onChange={(e) => setDetails({ ...details, expiry_date: e.target.value })}
+                 placeholder="e.g. DEC 2029 or 12/2029" disabled={busy} />
+               <label htmlFor="medicine-batch">Batch number</label>
+               <input id="medicine-batch" value={details.batch_number}
+                 onChange={(e) => setDetails({ ...details, batch_number: e.target.value })}
+                 placeholder="Optional" disabled={busy} />
+               {currentFile && (
+                 <button className="btn sm" type="button" style={{ marginTop: 8 }} onClick={() => onFile(currentFile)} disabled={busy}>
+                   Update analysis with details
+                 </button>
+               )}
+             </div>
           <p className="xs mut" style={{ marginTop: 10 }}>JPG or PNG, up to {MAX_MB} MB</p>
           {preview && <img className="preview-img" src={preview} alt="Selected medicine" />}
         </Card>
@@ -81,7 +106,22 @@ export default function Analyzer() {
           {result && (
             <>
               <KV label="Detected item">{result.detected_item}</KV>
-              <KV label="Packaging category">{result.category}</KV>
+              <KV label="Model label">{result.category}</KV>
+              <KV label="Text on package">
+                {result.ocr_text || <span className="mut">Not readable</span>}
+              </KV>
+              <KV label="Entered name">
+                {result.item_name || <span className="mut">Not provided</span>}
+              </KV>
+              <KV label="Expiry date">
+                {result.expiry_date || <span className="mut">Not detected</span>}
+              </KV>
+              <KV label="Batch number">
+                {result.batch_number || <span className="mut">Not provided</span>}
+              </KV>
+              {result.ocr_text && (
+                <p className="xs mut">Text recognized from packaging.</p>
+              )}
               <KV label="Confidence">
                 <span className="mono">{Math.round(result.confidence * 100)}%</span>
               </KV>
@@ -108,6 +148,11 @@ export default function Analyzer() {
               <p className="sm" style={{ color: eligible ? 'var(--green)' : 'var(--amber)' }}>
                 {result.message}
               </p>
+              {result.human_verification_required && (
+                <div className="note" style={{ marginTop: 10 }}>
+                  {result.model_quality?.reason || 'Human verification required before this item is accepted.'}
+                </div>
+              )}
 
               <Link
                 className={`btn ${eligible ? 'pri' : ''}`}

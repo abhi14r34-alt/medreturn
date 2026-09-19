@@ -42,6 +42,7 @@ from app.schemas import (
     UserOut,
 )
 from app.services import hardware
+from app.services.email import send_email
 from app.services.pickups import transition
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -275,6 +276,30 @@ def email_log(
     ]
 
 
+@router.post("/emails/test")
+def send_test_email(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Send an authenticated admin a safe delivery test and record the result."""
+    record = send_email(
+        db,
+        admin,
+        "MedReturn email delivery test",
+        "This is a test of your MedReturn email configuration.\n\n"
+        "If you received it, SMTP delivery is working.\n\n"
+        "Support: support@medreturn.in | 1800-123-4567",
+    )
+    db.commit()
+    return {
+        "id": record.id,
+        "recipient": record.recipient,
+        "transport": record.transport,
+        "delivered": record.delivered,
+        "error": record.error,
+    }
+
+
 # ------------------------------------------------------------- model
 @router.get("/model", response_model=ModelInfoOut)
 def model_info(
@@ -323,13 +348,17 @@ def read_settings(_: User = Depends(require_admin)) -> SettingsOut:
     threshold or the credit rate is a deployment action with an audit
     trail, not a click in a web form.
     """
+    runtime = inference.model_status()
+    active_labels = runtime["supported_classes"]
     return SettingsOut(
         demo_mode=settings.DEMO_MODE,
         confidence_threshold=settings.CONFIDENCE_THRESHOLD,
         credits_per_verified_return=settings.CREDITS_PER_VERIFIED_RETURN,
-        supported_waste_classes=SUPPORTED_WASTE_CLASSES,
-        supported_return_categories=SUPPORTED_RETURN_CATEGORIES,
-        email_transport="smtp" if settings.email_configured else "console",
+        # The checkpoint owns real labels. Static lists are demo-only fallbacks
+        # so the console never presents them as a deployed model taxonomy.
+        supported_waste_classes=active_labels or SUPPORTED_WASTE_CLASSES,
+        supported_return_categories=active_labels or SUPPORTED_RETURN_CATEGORIES,
+        email_transport=settings.email_transport,
         maps_provider=settings.MAPS_PROVIDER,
         hardware_simulated=hardware.get_controller().simulated,
     )

@@ -1,0 +1,76 @@
+{
+  "prepared_at": "2026-09-19T02:10:04.674299+00:00",
+  "purpose": "Prototype training only; retain demo mode and human verification.",
+  "public_source": {
+    "title": "Pharmaceutical and Biomedical Waste (PBW)",
+    "url": "https://www.kaggle.com/datasets/engineeringubu/pharmaceutical-and-biomedical-waste",
+    "license": "CC BY-NC-SA 4.0",
+    "archive": "C:\\Users\\abhi1\\Downloads\\files\\medreturn\\medreturn\\ml\\sources\\pharmaceutical-and-biomedical-waste.zip",
+    "original_images_added": 1006,
+    "source_folder_counts": {
+      "(BT) Body Tissue or Organ": 145,
+      "(GE) Glass equipment-packaging 551": 98,
+      "(ME) Metal equipment -packaging": 56,
+      "(OW) Organic wastes": 114,
+      "(PE) Plastic equipment-packaging": 98,
+      "(PP) Paper equipment-packaging": 107,
+      "(SN) Syringe needles": 82,
+      "Gauze": 72,
+      "Gloves": 45,
+      "Mask": 46,
+      "Syringe": 75,
+      "Tweezers": 68
+    },
+    "mapping": [
+      {
+        "source_keywords": [
+          "tissue",
+          "gauze",
+          "glove",
+          "mask"
+        ],
+        "target_label": "Infectious"
+      },
+      {
+        "source_keywords": [
+          "organic",
+          "paper"
+        ],
+        "target_label": "General"
+      },
+      {
+        "source_keywords": [
+          "plastic"
+        ],
+        "target_label": "Plastic Recyclable"
+      },
+      {
+        "source_keywords": [
+          "glass",
+          "metal",
+          "needle",
+          "syringe",
+          "tweezer"
+        ],
+        "target_label": "Glass and Sharps"
+      }
+    ],
+    "excluded": "Roboflow .rf. augmented copies, to prevent split leakage."
+  },
+  "local_source": {
+    "path": "C:\\Users\\abhi1\\Downloads\\files\\medreturn\\medreturn\\ml\\dataset",
+    "images_added": 58,
+    "excluded_labels": [
+      "General"
+    ],
+    "note": "Existing local images were copied; originals are untouched."
+  },
+  "class_counts": {
+    "General": 221,
+    "Glass and Sharps": 387,
+    "Infectious": 313,
+    "Pharmaceutical": 40,
+    "Plastic Recyclable": 103
+  },
+  "total_images": 1064
+}

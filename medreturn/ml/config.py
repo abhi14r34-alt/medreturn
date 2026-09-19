@@ -1,31 +1,26 @@
 """Training configuration.
 
-CLASSES is the single source of truth for what the model can predict. It
-is saved into the checkpoint, and the backend reads it back from there,
-so the API can never claim a category the weights do not encode.
+Classes are deliberately *not* declared here. ``ImageFolder`` learns them
+from the directory names in ``ml/dataset`` and writes that exact list into the
+checkpoint. This lets a deployment recognise the labels it was actually
+trained on instead of forcing every image into a source-code category list.
 """
 
-from dataclasses import dataclass, field
+import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List
-
 ROOT = Path(__file__).resolve().parent
-
-# Must match the folder names under ml/dataset/.
-CLASSES: List[str] = [
-    "Sharps",
-    "Infectious",
-    "Pharmaceutical",
-    "Glass",
-    "Plastic Recyclable",
-    "General",
-]
 
 
 @dataclass
 class TrainConfig:
-    dataset_dir: Path = ROOT / "dataset"
-    output_dir: Path = ROOT / "models"
+    # Keep the hand-labelled dataset as the default, while allowing an
+    # alternate prepared dataset to be selected without editing source code.
+    # This is useful for reproducible pilot training runs, e.g. with a public
+    # source dataset kept separate from locally collected images.
+    dataset_dir: Path = Path(os.environ.get("ML_DATASET_DIR", ROOT / "dataset"))
+    # Keep pilot checkpoints separate from the checkpoint served by the API.
+    output_dir: Path = Path(os.environ.get("ML_OUTPUT_DIR", ROOT / "models"))
     checkpoint_name: str = "model.pth"
 
     architecture: str = "mobilenet_v3_small"  # or "efficientnet_b0"
@@ -41,10 +36,11 @@ class TrainConfig:
 
     val_split: float = 0.15
     test_split: float = 0.15
+    min_images_per_class: int = 3
     seed: int = 42
-    num_workers: int = 2
-
-    classes: List[str] = field(default_factory=lambda: list(CLASSES))
+    # A single-process loader is the reliable default on Windows and in
+    # restricted deployment environments. Raise this on a Linux GPU runner.
+    num_workers: int = 0
 
     @property
     def checkpoint_path(self) -> Path:

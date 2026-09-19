@@ -1,8 +1,8 @@
 """Email notification service.
 
 Transport is chosen from configuration:
-  - SMTP_HOST set   -> real SMTP delivery
-  - SMTP_HOST blank -> console transport (logged and recorded, not sent)
+  - EMAIL_ENABLED=true and SMTP_HOST set -> real SMTP delivery
+  - otherwise                         -> console transport (logged, not sent)
 
 Swapping in SendGrid or SES means adding one _send_* function and one
 branch in send_email(). Callers never change. Credentials come only from
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import smtplib
+import ssl
 from email.message import EmailMessage
 from typing import Optional
 
@@ -35,11 +36,30 @@ def _send_smtp(to: str, subject: str, body: str) -> None:
     message["From"] = settings.SMTP_FROM
     message["To"] = to
     message["Subject"] = subject
+    if settings.SMTP_REPLY_TO:
+        message["Reply-To"] = settings.SMTP_REPLY_TO
     message.set_content(body)
 
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
-        if settings.SMTP_TLS:
-            server.starttls()
+    tls_context = ssl.create_default_context()
+    if settings.SMTP_SSL:
+        server_client = smtplib.SMTP_SSL(
+            settings.SMTP_HOST,
+            settings.SMTP_PORT,
+            timeout=settings.SMTP_TIMEOUT_SECONDS,
+            context=tls_context,
+        )
+    else:
+        server_client = smtplib.SMTP(
+            settings.SMTP_HOST,
+            settings.SMTP_PORT,
+            timeout=settings.SMTP_TIMEOUT_SECONDS,
+        )
+
+    with server_client as server:
+        if settings.SMTP_TLS and not settings.SMTP_SSL:
+            server.ehlo()
+            server.starttls(context=tls_context)
+            server.ehlo()
         if settings.SMTP_USER:
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
         server.send_message(message)
@@ -49,7 +69,7 @@ def send_email(db: Session, user: Optional[User], subject: str, body: str,
                pickup_id: Optional[str] = None) -> EmailLog:
     """Send (or log) one message and record the attempt."""
     recipient = user.email if user else settings.SMTP_FROM
-    transport = "smtp" if settings.email_configured else "console"
+    transport = settings.email_transport
     delivered = False
     error: Optional[str] = None
 
@@ -61,7 +81,7 @@ def send_email(db: Session, user: Optional[User], subject: str, body: str,
             error = f"{type(exc).__name__}: {exc}"[:255]  # break the workflow
             logger.error("Email to %s failed: %s", recipient, error)
     else:
-        logger.info("[console email] to=%s subject=%s", recipient, subject)
+        logger.info("[%s email] to=%s subject=%s", transport, recipient, subject)
 
     record = EmailLog(
         user_id=user.id if user else None,
@@ -114,3 +134,43 @@ def credits_email(db: Session, user: User, pickup_id: str, amount: int,
         SUPPORT_LINE,
     ])
     return send_email(db, user, subject, body, pickup_id=pickup_id)
+
+
+def analysis_email(
+    db: Session,
+    user: User,
+    *,
+    detected_item: str | None,
+    model_label: str | None,
+    confidence: float | None,
+    review_required: bool,
+) -> EmailLog | None:
+    """Optionally notify a user of a completed image analysis.
+
+    This is opt-in because an upload can be retried several times. It uses the
+    model label exactly as returned by the checkpoint; no email template maps
+    it back to a fixed category list.
+    """
+    if not settings.EMAIL_SEND_ANALYSIS_RESULTS:
+        return None
+
+    subject = "MedReturn analysis complete"
+    confidence_text = f"{confidence * 100:.0f}%" if confidence is not None else "unavailable"
+    review_text = (
+        "A team member will review this item before it is accepted."
+        if review_required
+        else "The image passed the configured review checks."
+    )
+    body = "\n".join([
+        f"Hello {user.full_name},",
+        "",
+        "Your medicine-return image was analysed.",
+        f"Item:       {detected_item or 'Not identified'}",
+        f"Model label: {model_label or 'Not identified'}",
+        f"Confidence: {confidence_text}",
+        "",
+        review_text,
+        "",
+        SUPPORT_LINE,
+    ])
+    return send_email(db, user, subject, body)

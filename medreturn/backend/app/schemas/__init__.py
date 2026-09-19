@@ -73,6 +73,9 @@ class AnalysisOut(BaseModel):
 
     return_id: int
     detected_item: Optional[str]
+    item_name: Optional[str] = None
+    expiry_date: Optional[str] = None
+    batch_number: Optional[str] = None
     category: Optional[str]
     confidence: float
     confidence_threshold: float
@@ -80,6 +83,10 @@ class AnalysisOut(BaseModel):
     inference_mode: str = Field(description="REAL or DEMO")
     is_simulated: bool
     model_version: str
+    ocr_text: Optional[str] = None
+    ocr_available: bool = False
+    human_verification_required: bool = False
+    model_quality: dict = Field(default_factory=dict)
     message: str
     supported_categories: List[str]
     disclaimer: str = (
@@ -227,6 +234,9 @@ class NotificationOut(BaseModel):
 class WastePredictionOut(BaseModel):
     event_id: str
     predicted_class: str
+    item_name: Optional[str] = None
+    expiry_date: Optional[str] = None
+    batch_number: Optional[str] = None
     confidence: float
     confidence_threshold: float
     decision: str
@@ -239,6 +249,10 @@ class WastePredictionOut(BaseModel):
     model_version: str
     hardware_simulated: bool
     hardware_detail: str
+    ocr_text: Optional[str] = None
+    ocr_available: bool = False
+    human_verification_required: bool = False
+    model_quality: dict = Field(default_factory=dict)
     supported_classes: List[str]
 
 
@@ -247,6 +261,9 @@ class WasteEventOut(BaseModel):
 
     event_id: str
     predicted_class: str
+    item_name: Optional[str] = None
+    expiry_date: Optional[str] = None
+    batch_number: Optional[str] = None
     confidence: float
     weight_kg: Optional[float]
     location: Optional[str]

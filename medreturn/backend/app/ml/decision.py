@@ -21,13 +21,26 @@ class Routing:
 
 def route_waste(predicted_class: str, confidence: float,
                 supported: List[str],
-                threshold: Optional[float] = None) -> Routing:
+                threshold: Optional[float] = None,
+                manual_review_labels: Optional[List[str]] = None) -> Routing:
     """Accept only when the class is supported AND confidence clears the bar.
 
     Anything else is quarantined for human verification. Low-confidence
     items are never routed automatically, whatever the predicted class.
     """
     threshold = settings.CONFIDENCE_THRESHOLD if threshold is None else threshold
+    manual_review_labels = manual_review_labels or []
+
+    if predicted_class.casefold() in {
+        label.casefold() for label in manual_review_labels
+    }:
+        return Routing(
+            decision=Decision.QUARANTINED.value,
+            route="QUARANTINE BAY",
+            reason=(
+                f"{predicted_class} is configured for mandatory human verification"
+            ),
+        )
 
     if predicted_class not in supported:
         return Routing(
@@ -53,7 +66,8 @@ def route_waste(predicted_class: str, confidence: float,
 
 def eligibility_for_return(predicted_class: str, confidence: float,
                            supported: List[str],
-                           threshold: Optional[float] = None) -> str:
+                           threshold: Optional[float] = None,
+                           manual_review_labels: Optional[List[str]] = None) -> str:
     """Household equivalent of the gate.
 
     Note what this does not do: it says nothing about whether a medicine is
@@ -61,6 +75,12 @@ def eligibility_for_return(predicted_class: str, confidence: float,
     a category the return programme accepts.
     """
     threshold = settings.CONFIDENCE_THRESHOLD if threshold is None else threshold
+    manual_review_labels = manual_review_labels or []
+
+    if predicted_class.casefold() in {
+        label.casefold() for label in manual_review_labels
+    }:
+        return Eligibility.NEEDS_REVIEW.value
 
     if predicted_class not in supported:
         return Eligibility.UNSUPPORTED.value

@@ -72,12 +72,11 @@ class Eligibility(str, Enum):
 # trained on. Editing them here without retraining will produce wrong
 # routing. ml/config.py is the single source of truth at training time.
 SUPPORTED_WASTE_CLASSES = [
-    "Sharps",
+    "General",
+    "Glass and Sharps",
     "Infectious",
     "Pharmaceutical",
-    "Glass",
     "Plastic Recyclable",
-    "General",
 ]
 
 SUPPORTED_RETURN_CATEGORIES = [
@@ -89,4 +88,12 @@ SUPPORTED_RETURN_CATEGORIES = [
     "Injection Vial",
 ]
 
-ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+ALLOWED_IMAGE_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/pjpeg",
+    "image/png",
+    "image/x-png",
+    "image/webp",
+    "application/octet-stream",
+}

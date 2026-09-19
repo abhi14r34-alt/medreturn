@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     CONFIDENCE_THRESHOLD: float = 0.80
     MODEL_PATH: str = "../ml/models/model.pth"
     MODEL_VERSION: str = "v1.2"
+    # Labels that the model may recognise but must never route automatically.
+    HUMAN_VERIFICATION_LABELS: List[str] = ["General"]
 
     # --- rewards ---
     CREDITS_PER_VERIFIED_RETURN: int = 50
@@ -60,13 +62,18 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "no-reply@medreturn.in"
     SMTP_TLS: bool = True
+    SMTP_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: int = Field(default=15, ge=1, le=120)
+    SMTP_REPLY_TO: str = ""
+    EMAIL_ENABLED: bool = True
+    EMAIL_SEND_ANALYSIS_RESULTS: bool = False
 
     # --- external service abstractions ---
     MAPS_PROVIDER: str = "demo"
     MAPS_API_KEY: str = ""
     HARDWARE_ENDPOINT: str = ""
 
-    @field_validator("CORS_ORIGINS", mode="before")
+    @field_validator("CORS_ORIGINS", "HUMAN_VERIFICATION_LABELS", mode="before")
     @classmethod
     def _split_origins(cls, v):
         if v is None:
@@ -103,8 +110,23 @@ class Settings(BaseSettings):
         return self.MAX_UPLOAD_MB * 1024 * 1024
 
     @property
+    def model_path(self) -> str:
+        """Resolve a relative checkpoint path from the backend directory."""
+        path = Path(self.MODEL_PATH)
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parents[2] / path
+        return str(path.resolve())
+
+    @property
     def email_configured(self) -> bool:
-        return bool(self.SMTP_HOST)
+        return self.EMAIL_ENABLED and bool(self.SMTP_HOST and self.SMTP_FROM)
+
+    @property
+    def email_transport(self) -> str:
+        """The safe, non-secret description of the active mail transport."""
+        if not self.EMAIL_ENABLED:
+            return "disabled"
+        return "smtp" if self.email_configured else "console"
 
 
 @lru_cache

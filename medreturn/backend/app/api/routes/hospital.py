@@ -17,7 +17,7 @@ from app.core.constants import (
 )
 from app.db.session import get_db
 from app.ml import inference
-from app.ml.decision import route_waste
+from app.ml.decision import Routing, route_waste
 from app.models import ModelVersion, QuarantineEvent, User, WasteEvent
 from app.schemas import (
     ModelInfoOut,
@@ -26,7 +26,7 @@ from app.schemas import (
     WasteEventOut,
     WastePredictionOut,
 )
-from app.services import hardware, storage
+from app.services import hardware, ocr, storage
 from app.services.ids import next_id
 
 router = APIRouter(prefix="/hospital", tags=["hospital"])
@@ -51,6 +51,9 @@ async def predict(
     file: UploadFile = File(...),
     weight_kg: float = Form(0.0),
     location: str = Form("Unspecified inlet"),
+    item_name: Optional[str] = Form(None),
+    expiry_date: Optional[str] = Form(None),
+    batch_number: Optional[str] = Form(None),
     user: User = Depends(require_hospital),
     db: Session = Depends(get_db),
 ) -> WastePredictionOut:
@@ -61,15 +64,30 @@ async def predict(
     """
     hospital_id = _require_hospital_id(user)
     path, data = await storage.save_image(file, "waste")
-
-    pool = inference.SUPPORTED_CLASSES or SUPPORTED_WASTE_CLASSES
+    ocr_result = ocr.read_image(data)
+    item_name = item_name.strip() if item_name else None
+    expiry_date = expiry_date.strip() if expiry_date else ocr_result.expiry_date
+    batch_number = batch_number.strip() if batch_number else None
 
     try:
-        prediction = inference.predict(data, pool)
+        prediction = inference.predict(data, SUPPORTED_WASTE_CLASSES)
     except inference.InferenceUnavailable as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 
-    routing = route_waste(prediction.label, prediction.confidence, pool)
+    pool = inference.SUPPORTED_CLASSES if not prediction.is_demo else SUPPORTED_WASTE_CLASSES
+    quality = inference.quality_status()
+    routing = route_waste(
+        prediction.label,
+        prediction.confidence,
+        pool,
+        manual_review_labels=settings.HUMAN_VERIFICATION_LABELS,
+    )
+    if not prediction.is_demo and not quality["deployable"]:
+        routing = Routing(
+            decision=Decision.QUARANTINED.value,
+            route="QUARANTINE BAY",
+            reason=quality["reason"],
+        )
 
     event = WasteEvent(
         event_id=next_id(db, "waste"),
@@ -80,6 +98,9 @@ async def predict(
         weight_kg=weight_kg,
         location=location,
         image_path=path,
+        item_name=item_name,
+        expiry_date=expiry_date,
+        batch_number=batch_number,
         decision=routing.decision,
         route=routing.route,
         reason=routing.reason,
@@ -103,6 +124,9 @@ async def predict(
     return WastePredictionOut(
         event_id=event.event_id,
         predicted_class=prediction.label,
+        item_name=event.item_name,
+        expiry_date=event.expiry_date,
+        batch_number=event.batch_number,
         confidence=round(prediction.confidence, 4),
         confidence_threshold=settings.CONFIDENCE_THRESHOLD,
         decision=routing.decision,
@@ -115,6 +139,10 @@ async def predict(
         model_version=prediction.model_version,
         hardware_simulated=command.simulated,
         hardware_detail=command.detail,
+        ocr_text=ocr_result.text or None,
+        ocr_available=ocr_result.available,
+        human_verification_required=(routing.decision == Decision.QUARANTINED.value),
+        model_quality=quality,
         supported_classes=pool,
     )
 

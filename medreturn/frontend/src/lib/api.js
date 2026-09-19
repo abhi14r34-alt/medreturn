@@ -72,9 +72,12 @@ export const api = {
   updateProfile: (data) => request('/auth/me', { method: 'PATCH', body: data }),
 
   // household
-  analyze: (file) => {
+  analyze: (file, fields = {}) => {
     const form = new FormData()
     form.append('file', file)
+    Object.entries(fields).forEach(([key, value]) => {
+      if (value) form.append(key, value)
+    })
     return request('/household/analyze', { method: 'POST', body: form, isForm: true })
   },
   createPickup: (data) => request('/household/pickups', { method: 'POST', body: data }),
@@ -87,11 +90,14 @@ export const api = {
   returnHistory: () => request('/household/history'),
 
   // hospital
-  predictWaste: (file, weightKg, location) => {
+  predictWaste: (file, weightKg, location, fields = {}) => {
     const form = new FormData()
     form.append('file', file)
     form.append('weight_kg', String(weightKg))
     form.append('location', location)
+    Object.entries(fields).forEach(([key, value]) => {
+      if (value) form.append(key, value)
+    })
     return request('/hospital/predict', { method: 'POST', body: form, isForm: true })
   },
   hospitalDashboard: () => request('/hospital/dashboard'),
@@ -123,6 +129,7 @@ export const api = {
   hospitals: () => request('/admin/hospitals'),
   allTransactions: () => request('/admin/credits/transactions'),
   emailLog: () => request('/admin/emails'),
+  sendTestEmail: () => request('/admin/emails/test', { method: 'POST' }),
   adminModel: () => request('/admin/model'),
   adminSettings: () => request('/admin/settings'),
 

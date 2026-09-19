@@ -23,7 +23,7 @@ from pathlib import Path
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 from torchvision import datasets
 from torchvision.models import (
     MobileNet_V3_Small_Weights,
@@ -57,53 +57,99 @@ def set_backbone_trainable(model: nn.Module, trainable: bool) -> None:
             parameter.requires_grad = trainable
 
 
-def load_datasets():
+def _stratified_indices(targets: list[int], classes: list[str]):
+    """Make deterministic train/validation/test splits per label.
+
+    A random split can put none of a small class in validation or test. That
+    makes accuracy look good while hiding that the model cannot recognise a
+    minority label, which is especially risky for waste handling.
+    """
+    by_class: dict[int, list[int]] = {index: [] for index in range(len(classes))}
+    for index, target in enumerate(targets):
+        by_class[target].append(index)
+
+    generator = torch.Generator().manual_seed(config.seed)
+    train_indices: list[int] = []
+    val_indices: list[int] = []
+    test_indices: list[int] = []
+
+    for class_index, indices in by_class.items():
+        count = len(indices)
+        if count < config.min_images_per_class:
+            raise ValueError(
+                f"Class '{classes[class_index]}' has {count} images; at least "
+                f"{config.min_images_per_class} are required for train/validation/test."
+            )
+
+        shuffled = torch.tensor(indices)[torch.randperm(count, generator=generator)].tolist()
+        # Reserve at least one item for each held-out split. The remaining
+        # images are training data, so every class is still represented there.
+        n_val = max(1, round(count * config.val_split))
+        n_test = max(1, round(count * config.test_split))
+        if count - n_val - n_test < 1:
+            n_val, n_test = 1, 1
+
+        val_indices.extend(shuffled[:n_val])
+        test_indices.extend(shuffled[n_val:n_val + n_test])
+        train_indices.extend(shuffled[n_val + n_test:])
+
+    return train_indices, val_indices, test_indices
+
+
+def load_datasets(include_reference: bool = False):
     dataset_dir = Path(config.dataset_dir)
     if not dataset_dir.exists() or not any(dataset_dir.iterdir()):
         print(
             f"No dataset found at {dataset_dir}.\n\n"
             "Expected layout:\n"
-            "  ml/dataset/<Class Name>/image001.jpg\n\n"
-            "One folder per class, matching CLASSES in ml/config.py. See\n"
-            "ml/dataset/README.md. Training cannot proceed without labelled data.",
+            "  ml/dataset/<Label Name>/image001.jpg\n\n"
+            "Each folder becomes a model label. See ml/dataset/README.md. "
+            "Training cannot proceed without labelled data.",
             file=sys.stderr,
         )
         raise SystemExit(2)
 
     train_tf, eval_tf = build_transforms(config.image_size)
 
-    # ImageFolder derives classes from directory names.
+    # ImageFolder derives classes from directory names. The list is persisted
+    # in the checkpoint so serving uses the same labels without a fixed list.
     full = datasets.ImageFolder(dataset_dir)
-    if full.classes != config.classes:
-        print(
-            "Dataset folders do not match CLASSES in ml/config.py.\n"
-            f"  folders: {full.classes}\n"
-            f"  config:  {config.classes}\n"
-            "Fix one of them before training; a mismatch here silently mislabels "
-            "every prediction the API makes.",
-            file=sys.stderr,
+    if len(full.classes) < 2:
+        print("At least two labelled folders are required for classification.", file=sys.stderr)
+        raise SystemExit(2)
+
+    try:
+        train_indices, val_indices, test_indices = _stratified_indices(
+            full.targets, full.classes
         )
-        raise SystemExit(2)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
 
-    total = len(full)
-    n_val = int(total * config.val_split)
-    n_test = int(total * config.test_split)
-    n_train = total - n_val - n_test
-    if min(n_train, n_val, n_test) <= 0:
-        print(f"Dataset is too small to split ({total} images).", file=sys.stderr)
-        raise SystemExit(2)
+    # Each subset needs its own ImageFolder because it has a different image
+    # transform. All three still use the same, deterministic indices.
+    train_set = Subset(datasets.ImageFolder(dataset_dir, transform=train_tf), train_indices)
+    val_set = Subset(datasets.ImageFolder(dataset_dir, transform=eval_tf), val_indices)
+    test_set = Subset(datasets.ImageFolder(dataset_dir, transform=eval_tf), test_indices)
 
-    generator = torch.Generator().manual_seed(config.seed)
-    train_set, val_set, test_set = random_split(
-        full, [n_train, n_val, n_test], generator=generator
-    )
-
-    # Subsets share the parent transform, so wrap them to apply the right one.
-    train_set.dataset = datasets.ImageFolder(dataset_dir, transform=train_tf)
-    val_set.dataset = datasets.ImageFolder(dataset_dir, transform=eval_tf)
-    test_set.dataset = datasets.ImageFolder(dataset_dir, transform=eval_tf)
+    if include_reference:
+        # The rejection guard must compare deterministic embeddings. Do not use
+        # the randomly augmented training transform for its reference images.
+        reference_set = Subset(
+            datasets.ImageFolder(dataset_dir, transform=eval_tf), train_indices
+        )
+        return train_set, val_set, test_set, full.classes, reference_set
 
     return train_set, val_set, test_set, full.classes
+
+
+def class_balanced_sampler(train_set: Subset) -> WeightedRandomSampler:
+    """Sample smaller classes as often as large ones during training."""
+    targets = train_set.dataset.targets
+    labels = [targets[index] for index in train_set.indices]
+    counts = torch.bincount(torch.tensor(labels), minlength=len(train_set.dataset.classes))
+    weights = [1.0 / counts[label].item() for label in labels]
+    return WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
 
 
 def run_epoch(model, loader, criterion, optimizer, device, train: bool):
@@ -128,15 +174,72 @@ def run_epoch(model, loader, criterion, optimizer, device, train: bool):
     return total_loss / seen, correct / seen
 
 
+def _feature_embeddings(model: nn.Module, images: torch.Tensor) -> torch.Tensor:
+    """Return a normalized backbone feature vector for each image.
+
+    The classifier must choose one of its labels, even for a photograph of a
+    person or a blank screen.  Comparing its backbone features to reviewed
+    training images gives the serving layer a separate, open-set rejection
+    signal before it trusts that forced label.
+    """
+    features = model.features(images)
+    features = model.avgpool(features)
+    features = torch.flatten(features, 1)
+    return torch.nn.functional.normalize(features, dim=1)
+
+
+def build_similarity_guard(
+    model: nn.Module,
+    reference_set: Subset,
+    validation_set: Subset,
+    device: torch.device,
+) -> dict:
+    """Calibrate an open-set rejection threshold on the validation split."""
+    def collect(dataset: Subset) -> tuple[torch.Tensor, torch.Tensor]:
+        vectors, labels = [], []
+        loader = DataLoader(dataset, batch_size=config.batch_size,
+                            num_workers=config.num_workers)
+        with torch.no_grad():
+            for images, batch_labels in loader:
+                vectors.append(_feature_embeddings(model, images.to(device)).cpu())
+                labels.append(batch_labels.cpu())
+        return torch.cat(vectors), torch.cat(labels)
+
+    model.eval()
+    references, reference_labels = collect(reference_set)
+    validation, validation_labels = collect(validation_set)
+    similarity = validation @ references.T
+    same_label = reference_labels.unsqueeze(0) == validation_labels.unsqueeze(1)
+    nearest_same_label = similarity.masked_fill(~same_label, -1.0).max(dim=1).values
+
+    # Reject only the least similar five percent of known validation images.
+    # This is intentionally conservative: the gate is a safety fallback, not
+    # a substitute for collecting representative negative examples.
+    threshold = float(torch.quantile(nearest_same_label, 0.05))
+    return {
+        "method": "nearest_feature_cosine",
+        "threshold": threshold,
+        "calibration_quantile": 0.05,
+        "validation_samples": len(validation_set),
+        "reference_features": references.to(torch.float16),
+    }
+
+
 def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    train_set, val_set, test_set, classes = load_datasets()
+    train_set, val_set, test_set, classes, reference_set = load_datasets(
+        include_reference=True
+    )
     print(f"Images -> train {len(train_set)} | val {len(val_set)} | test {len(test_set)}")
 
-    train_loader = DataLoader(train_set, batch_size=config.batch_size, shuffle=True,
-                              num_workers=config.num_workers)
+    train_loader = DataLoader(
+        train_set,
+        batch_size=config.batch_size,
+        sampler=class_balanced_sampler(train_set),
+        num_workers=config.num_workers,
+    )
     val_loader = DataLoader(val_set, batch_size=config.batch_size,
                             num_workers=config.num_workers)
     test_loader = DataLoader(test_set, batch_size=config.batch_size,
@@ -180,6 +283,7 @@ def main() -> None:
                 "classes": classes,
                 "architecture": config.architecture,
                 "image_size": config.image_size,
+                "class_to_idx": {name: index for index, name in enumerate(classes)},
                 "trained_at": datetime.utcnow().isoformat(),
                 "config": {k: str(v) for k, v in asdict(config).items()},
             }, config.checkpoint_path)
@@ -195,6 +299,11 @@ def main() -> None:
     model.load_state_dict(checkpoint["state_dict"])
     test_loss, test_acc = run_epoch(model, test_loader, criterion,
                                     optimizer, device, train=False)
+
+    checkpoint["similarity_guard"] = build_similarity_guard(
+        model, reference_set, val_set, device
+    )
+    torch.save(checkpoint, config.checkpoint_path)
 
     with open(config.output_dir / "history.json", "w") as fh:
         json.dump(history, fh, indent=2)

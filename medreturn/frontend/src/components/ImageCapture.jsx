@@ -6,7 +6,15 @@ export default function ImageCapture({ onCapture, onUpload, disabled = false }) 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const [cameraOpen, setCameraOpen] = useState(false)
+  const [cameraReady, setCameraReady] = useState(false)
   const [cameraError, setCameraError] = useState(null)
+
+  useEffect(() => {
+    if (!cameraOpen || !streamRef.current || !videoRef.current) return
+
+    videoRef.current.srcObject = streamRef.current
+    videoRef.current.play().catch(() => {})
+  }, [cameraOpen])
 
   useEffect(() => () => {
     streamRef.current?.getTracks().forEach((track) => track.stop())
@@ -15,6 +23,7 @@ export default function ImageCapture({ onCapture, onUpload, disabled = false }) 
   const closeCamera = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
+    setCameraReady(false)
     setCameraOpen(false)
   }
 
@@ -27,14 +36,16 @@ export default function ImageCapture({ onCapture, onUpload, disabled = false }) 
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 640, max: 1280 },
+          height: { ideal: 480, max: 720 },
+          frameRate: { ideal: 15, max: 24 },
+        },
         audio: false,
       })
       streamRef.current = stream
       setCameraOpen(true)
-      requestAnimationFrame(() => {
-        if (videoRef.current) videoRef.current.srcObject = stream
-      })
     } catch (error) {
       setCameraError(error.name === 'NotAllowedError'
         ? 'Camera permission was denied. Allow camera access or upload a photo instead.'
@@ -44,17 +55,18 @@ export default function ImageCapture({ onCapture, onUpload, disabled = false }) 
 
   const takePhoto = () => {
     const video = videoRef.current
-    if (!video?.videoWidth || !video.videoHeight) return
+    if (!video || !video.videoWidth || !video.videoHeight) return
 
     const canvas = document.createElement('canvas')
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
+    const scale = Math.min(1, 1280 / video.videoWidth)
+    canvas.width = Math.round(video.videoWidth * scale)
+    canvas.height = Math.round(video.videoHeight * scale)
     canvas.getContext('2d').drawImage(video, 0, 0)
     canvas.toBlob((blob) => {
       if (!blob) return
       onCapture(new File([blob], `camera-${Date.now()}.jpg`, { type: 'image/jpeg' }))
       closeCamera()
-    }, 'image/jpeg', 0.92)
+    }, 'image/jpeg', 0.85)
   }
 
   const handleUpload = (event) => {
@@ -77,9 +89,17 @@ export default function ImageCapture({ onCapture, onUpload, disabled = false }) 
 
       {cameraOpen && (
         <div className="camera-panel">
-          <video ref={videoRef} autoPlay playsInline muted className="camera-video" />
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            onCanPlay={() => setCameraReady(true)}
+            onLoadedMetadata={() => setCameraReady(true)}
+            className="camera-video"
+          />
           <div className="row" style={{ marginTop: 10, justifyContent: 'center' }}>
-            <button className="btn pri" type="button" onClick={takePhoto}>
+            <button className="btn pri" type="button" onClick={takePhoto} disabled={!cameraReady && !videoRef.current?.videoWidth}>
               <Camera size={16} /> Take photo
             </button>
             <button className="btn" type="button" onClick={closeCamera}>

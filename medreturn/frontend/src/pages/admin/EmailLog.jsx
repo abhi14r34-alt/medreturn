@@ -5,27 +5,69 @@ import { formatDate } from '../../lib/format'
 
 export default function EmailLog() {
   const [rows, setRows] = useState(null)
+  const [settings, setSettings] = useState(null)
   const [error, setError] = useState(null)
+  const [testStatus, setTestStatus] = useState(null)
+  const [sendingTest, setSendingTest] = useState(false)
 
-  useEffect(() => { api.emailLog().then(setRows).catch(setError) }, [])
+  const load = () => Promise.all([api.emailLog(), api.adminSettings()])
+    .then(([emailRows, runtimeSettings]) => {
+      setRows(emailRows)
+      setSettings(runtimeSettings)
+    })
+    .catch(setError)
+
+  useEffect(() => { load() }, [])
+
+  const sendTest = async () => {
+    setSendingTest(true)
+    setTestStatus(null)
+    try {
+      const result = await api.sendTestEmail()
+      setTestStatus(
+        result.delivered
+          ? `Test email sent to ${result.recipient}.`
+          : result.transport === 'disabled'
+            ? 'Email delivery is disabled on the server.'
+            : result.transport === 'smtp'
+              ? `SMTP delivery failed${result.error ? `: ${result.error}` : '.'}`
+              : 'Test email was logged locally. Configure SMTP to deliver it.',
+      )
+      await load()
+    } catch (requestError) {
+      setTestStatus(requestError.message)
+    } finally {
+      setSendingTest(false)
+    }
+  }
 
   if (error) return <ErrorNote error={error} />
-  if (!rows) return <Loading />
+  if (!rows || !settings) return <Loading />
 
-  const consoleOnly = rows.every((r) => r.transport === 'console')
+  const smtpConfigured = settings.email_transport === 'smtp'
 
   return (
     <>
       <PageHeader
         title="Email log"
         subtitle="Every notification the system queued."
-        actions={consoleOnly ? <DemoTag>NO SMTP CONFIGURED</DemoTag> : null}
+        actions={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {!smtpConfigured && (
+              <DemoTag>{settings.email_transport === 'disabled' ? 'EMAIL DISABLED' : 'NO SMTP CONFIGURED'}</DemoTag>
+            )}
+            <button className="btn pri sm" type="button" onClick={sendTest} disabled={sendingTest}>
+              {sendingTest ? 'Sending...' : 'Send test email'}
+            </button>
+          </div>
+        }
       />
       <div className="note" style={{ marginBottom: 16 }}>
-        The email service is an abstraction. With SMTP settings blank, messages are composed
-        and logged but not sent. Fill in the SMTP variables in the backend <code>.env</code>
-        to deliver them for real. Credentials never live in client code.
+        {smtpConfigured
+          ? 'SMTP delivery is enabled. Send a test email to verify the current configuration.'
+          : 'Messages are composed and logged but not delivered. Fill in the SMTP variables in the backend .env and restart the API. Credentials never live in client code.'}
       </div>
+      {testStatus && <div className="note" style={{ marginBottom: 16 }}>{testStatus}</div>}
 
       {rows.length === 0 ? (
         <Card><Empty>No emails queued yet.</Empty></Card>
@@ -49,6 +91,7 @@ export default function EmailLog() {
                       <span className={`pill ${r.delivered ? 'p-green' : 'p-grey'}`}>
                         {r.delivered ? 'Sent' : 'Not sent'}
                       </span>
+                      {r.error && <div className="xs" style={{ color: 'var(--amber)', marginTop: 4 }}>{r.error}</div>}
                     </td>
                   </tr>
                 ))}

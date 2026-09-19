@@ -9,6 +9,7 @@ const INLETS = ['Ward 3 Inlet', 'OT Block Inlet', 'Lab Inlet', 'ICU Inlet']
 export default function WasteAnalyzer() {
   const [location, setLocation] = useState(INLETS[0])
   const [weight, setWeight] = useState(1.2)
+  const [details, setDetails] = useState({ item_name: '', expiry_date: '', batch_number: '' })
   const [preview, setPreview] = useState(null)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
@@ -20,15 +21,16 @@ export default function WasteAnalyzer() {
     setError(null)
     setResult(null)
 
-    if (!file.type.startsWith('image/')) {
-      setError(new Error('That file is not an image.'))
+    const isImg = (file.type && file.type.startsWith('image/')) || /\.(jpe?g|png|webp|gif|bmp)$/i.test(file.name || '')
+    if (!isImg) {
+      setError(new Error('That file is not an image. Upload a JPG or PNG.'))
       return
     }
 
     setPreview(URL.createObjectURL(file))
     setBusy(true)
     try {
-      setResult(await api.predictWaste(file, Number(weight), location))
+      setResult(await api.predictWaste(file, Number(weight), location, details))
     } catch (err) {
       setError(err)
     } finally {
@@ -61,6 +63,21 @@ export default function WasteAnalyzer() {
             <input id="wt" type="number" step="0.05" value={weight}
                    onChange={(e) => setWeight(e.target.value)} />
           </div>
+             <div className="manual-details">
+               <h4>Enter details manually (optional)</h4>
+               <label htmlFor="waste-name">Waste or medicine name</label>
+               <input id="waste-name" value={details.item_name}
+                 onChange={(e) => setDetails({ ...details, item_name: e.target.value })}
+                 placeholder="e.g. used syringe or Dolo-650" disabled={busy} />
+               <label htmlFor="waste-expiry">Expiry date</label>
+               <input id="waste-expiry" value={details.expiry_date}
+                 onChange={(e) => setDetails({ ...details, expiry_date: e.target.value })}
+                 placeholder="Optional" disabled={busy} />
+               <label htmlFor="waste-batch">Batch number</label>
+               <input id="waste-batch" value={details.batch_number}
+                 onChange={(e) => setDetails({ ...details, batch_number: e.target.value })}
+                 placeholder="Optional" disabled={busy} />
+             </div>
           <ImageCapture onCapture={onFile} onUpload={onFile} disabled={busy} />
           {preview && <img className="preview-img" src={preview} alt="Waste item" />}
         </Card>
@@ -87,6 +104,21 @@ export default function WasteAnalyzer() {
             <>
               <KV label="Event ID"><span className="mono">{result.event_id}</span></KV>
               <KV label="Predicted class">{result.predicted_class}</KV>
+              <KV label="Text on item">
+                {result.ocr_text || <span className="mut">Not readable</span>}
+              </KV>
+              <KV label="Entered name">
+                {result.item_name || <span className="mut">Not provided</span>}
+              </KV>
+              <KV label="Expiry date">
+                {result.expiry_date || <span className="mut">Not detected</span>}
+              </KV>
+              <KV label="Batch number">
+                {result.batch_number || <span className="mut">Not provided</span>}
+              </KV>
+              {result.ocr_text && (
+                <p className="xs mut">Text recognized from packaging.</p>
+              )}
               <KV label="Confidence">
                 <span className="mono">{Math.round(result.confidence * 100)}%</span>
               </KV>
@@ -123,6 +155,12 @@ export default function WasteAnalyzer() {
                     : `${result.reason}. The item is held for human verification and is not routed.`}
                 </p>
               </div>
+
+              {result.human_verification_required && (
+                <div className="note" style={{ marginTop: 10 }}>
+                  {result.model_quality?.reason || 'Human verification required. This item remains in quarantine until reviewed.'}
+                </div>
+              )}
 
               {result.hardware_simulated && (
                 <div className="note" style={{ marginTop: 12 }}>

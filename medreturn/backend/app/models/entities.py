@@ -88,6 +88,9 @@ class WasteEvent(Base):
     weight_kg: Mapped[float | None] = mapped_column(Float)
     location: Mapped[str | None] = mapped_column(String(120))
     image_path: Mapped[str | None] = mapped_column(String(255))
+    item_name: Mapped[str | None] = mapped_column(String(190))
+    expiry_date: Mapped[str | None] = mapped_column(String(32))
+    batch_number: Mapped[str | None] = mapped_column(String(64))
 
     decision: Mapped[str] = mapped_column(String(20), default=Decision.QUARANTINED.value)
     route: Mapped[str | None] = mapped_column(String(64))
@@ -132,6 +135,9 @@ class HouseholdReturn(Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     image_path: Mapped[str | None] = mapped_column(String(255))
+    item_name: Mapped[str | None] = mapped_column(String(190))
+    expiry_date: Mapped[str | None] = mapped_column(String(32))
+    batch_number: Mapped[str | None] = mapped_column(String(64))
     detected_item: Mapped[str | None] = mapped_column(String(190))
     category: Mapped[str | None] = mapped_column(String(64))
     confidence: Mapped[float | None] = mapped_column(Float)

@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
@@ -33,7 +33,8 @@ from app.schemas import (
     PickupOut,
     TrackingOut,
 )
-from app.services import maps, storage
+from app.services import maps, ocr, storage
+from app.services.email import analysis_email
 from app.services.ids import next_id
 from app.services.pickups import transition
 
@@ -57,6 +58,9 @@ ELIGIBILITY_MESSAGES = {
 @router.post("/analyze", response_model=AnalysisOut)
 async def analyze(
     file: UploadFile = File(...),
+    item_name: Optional[str] = Form(None),
+    expiry_date: Optional[str] = Form(None),
+    batch_number: Optional[str] = Form(None),
     user: User = Depends(require_household),
     db: Session = Depends(get_db),
 ) -> AnalysisOut:
@@ -67,22 +71,45 @@ async def analyze(
     """
     path, data = await storage.save_image(file, "returns")
 
-    # The model's own class list wins when a real checkpoint is loaded.
-    pool = inference.SUPPORTED_CLASSES or SUPPORTED_RETURN_CATEGORIES
-
+    ocr_result = ocr.read_image(data)
+    item_name = item_name.strip() if item_name else None
+    expiry_date = expiry_date.strip() if expiry_date else ocr_result.expiry_date
+    batch_number = batch_number.strip() if batch_number else None
+    # A fallback pool is used only when the explicit demo path is active. A
+    # real model returns one of the labels stored in its own checkpoint.
     try:
-        prediction = inference.predict(data, pool)
+        prediction = inference.predict(data, SUPPORTED_RETURN_CATEGORIES)
     except inference.InferenceUnavailable as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 
-    eligibility = eligibility_for_return(
-        prediction.label, prediction.confidence, pool
+    pool = inference.SUPPORTED_CLASSES if not prediction.is_demo else SUPPORTED_RETURN_CATEGORIES
+    quality = inference.quality_status()
+
+    # OCR supplies a descriptive item name, not a hard-coded category. The
+    # model label remains the result produced by the trained checkpoint.
+    identified_name = item_name or ocr.extract_item_name(ocr_result.text)
+    detected_item = (
+        f"{identified_name} — {prediction.label}"
+        if identified_name else prediction.label
     )
+
+    eligibility = eligibility_for_return(
+        prediction.label,
+        prediction.confidence,
+        pool,
+        manual_review_labels=settings.HUMAN_VERIFICATION_LABELS,
+    )
+    quality_requires_review = not prediction.is_demo and not quality["deployable"]
+    if quality_requires_review:
+        eligibility = Eligibility.NEEDS_REVIEW.value
 
     record = HouseholdReturn(
         user_id=user.id,
         image_path=path,
-        detected_item=prediction.label,
+        item_name=identified_name,
+        expiry_date=expiry_date,
+        batch_number=batch_number,
+        detected_item=detected_item,
         category=(
             prediction.label
             if eligibility != Eligibility.UNSUPPORTED.value
@@ -93,12 +120,23 @@ async def analyze(
         inference_mode=prediction.mode,
     )
     db.add(record)
+    analysis_email(
+        db,
+        user,
+        detected_item=detected_item,
+        model_label=prediction.label,
+        confidence=prediction.confidence,
+        review_required=(eligibility != Eligibility.ELIGIBLE.value),
+    )
     db.commit()
     db.refresh(record)
 
     return AnalysisOut(
         return_id=record.id,
         detected_item=record.detected_item,
+        item_name=record.item_name,
+        expiry_date=record.expiry_date,
+        batch_number=record.batch_number,
         category=record.category,
         confidence=round(prediction.confidence, 4),
         confidence_threshold=settings.CONFIDENCE_THRESHOLD,
@@ -106,7 +144,11 @@ async def analyze(
         inference_mode=prediction.mode,
         is_simulated=prediction.is_demo,
         model_version=prediction.model_version,
-        message=ELIGIBILITY_MESSAGES[eligibility],
+        ocr_text=ocr_result.text or None,
+        ocr_available=ocr_result.available,
+        human_verification_required=(eligibility != Eligibility.ELIGIBLE.value),
+        model_quality=quality,
+        message=ELIGIBILITY_MESSAGES.get(eligibility, "Analysis complete."),
         supported_categories=pool,
     )
 

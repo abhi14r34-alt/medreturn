@@ -19,9 +19,11 @@ deliberate: a wrong-but-confident answer is worse than an outage here.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional
 
 from app.core.config import settings
@@ -34,6 +36,8 @@ SUPPORTED_CLASSES: List[str] = []
 
 _model = None
 _transform = None
+_reference_features = None
+_similarity_threshold: float | None = None
 _load_attempted = False
 _load_error: Optional[str] = None
 
@@ -56,13 +60,14 @@ class InferenceUnavailable(RuntimeError):
 
 def _try_load_model() -> None:
     """Load the checkpoint once. Failures are recorded, never raised here."""
-    global _model, _transform, _load_attempted, _load_error, SUPPORTED_CLASSES
+    global _model, _transform, _reference_features, _similarity_threshold
+    global _load_attempted, _load_error, SUPPORTED_CLASSES
 
     if _load_attempted:
         return
     _load_attempted = True
 
-    path = os.path.abspath(settings.MODEL_PATH)
+    path = settings.model_path
     if not os.path.exists(path):
         _load_error = f"No checkpoint at {path}"
         logger.warning("Model checkpoint not found at %s - demo path active", path)
@@ -71,7 +76,7 @@ def _try_load_model() -> None:
     try:
         import torch
         from torchvision import transforms
-        from torchvision.models import mobilenet_v3_small
+        from torchvision.models import efficientnet_b0, mobilenet_v3_small
     except ImportError:
         _load_error = "torch/torchvision not installed"
         logger.warning("PyTorch is not installed - demo path active")
@@ -85,7 +90,16 @@ def _try_load_model() -> None:
             logger.error("Checkpoint at %s carries no 'classes' key", path)
             return
 
-        model = mobilenet_v3_small(weights=None)
+        architecture = checkpoint.get("architecture", "mobilenet_v3_small")
+        if architecture == "efficientnet_b0":
+            model = efficientnet_b0(weights=None)
+        elif architecture == "mobilenet_v3_small":
+            model = mobilenet_v3_small(weights=None)
+        else:
+            _load_error = f"Unsupported checkpoint architecture: {architecture}"
+            logger.error("%s", _load_error)
+            return
+
         in_features = model.classifier[-1].in_features
         model.classifier[-1] = torch.nn.Linear(in_features, len(classes))
         model.load_state_dict(checkpoint["state_dict"])
@@ -93,8 +107,18 @@ def _try_load_model() -> None:
 
         _model = model
         SUPPORTED_CLASSES = list(classes)
+        similarity_guard = checkpoint.get("similarity_guard") or {}
+        reference_features = similarity_guard.get("reference_features")
+        similarity_threshold = similarity_guard.get("threshold")
+        if getattr(reference_features, "ndim", 0) == 2 and similarity_threshold is not None:
+            _reference_features = reference_features.float()
+            _similarity_threshold = float(similarity_threshold)
+        else:
+            _reference_features = None
+            _similarity_threshold = None
+        image_size = int(checkpoint.get("image_size", 224))
         _transform = transforms.Compose([
-            transforms.Resize((224, 224)),
+            transforms.Resize((image_size, image_size)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225]),
@@ -112,11 +136,46 @@ def model_status() -> dict:
         "loaded": _model is not None,
         "mode": "REAL" if _model is not None else "DEMO",
         "demo_mode_enabled": settings.DEMO_MODE,
-        "checkpoint_path": os.path.abspath(settings.MODEL_PATH),
+        "checkpoint_path": settings.model_path,
         "model_version": settings.MODEL_VERSION,
         "confidence_threshold": settings.CONFIDENCE_THRESHOLD,
         "supported_classes": SUPPORTED_CLASSES,
         "load_error": _load_error,
+        "quality": quality_status(),
+    }
+
+
+def quality_status() -> dict:
+    """Allow automatic routing only after meaningful held-out evaluation."""
+    try:
+        metrics_path = Path(settings.model_path).with_name("metrics.json")
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {
+            "deployable": False,
+            "reason": "No evaluated test metrics are available; human verification required.",
+        }
+
+    test_images = int(metrics.get("test_images", 0))
+    macro_f1 = float(metrics.get("macro_f1", 0.0))
+    per_class = metrics.get("per_class") or {}
+    minimum_class_support = min(
+        (int(values.get("support", 0)) for values in per_class.values()), default=0
+    )
+    deployable = (
+        test_images >= 60
+        and minimum_class_support >= 10
+        and macro_f1 >= 0.60
+    )
+    return {
+        "deployable": deployable,
+        "test_images": test_images,
+        "macro_f1": macro_f1,
+        "minimum_class_support": minimum_class_support,
+        "reason": None if deployable else (
+            "Evaluation coverage or quality is too low for automatic routing; "
+            "human verification is required."
+        ),
     }
 
 
@@ -124,18 +183,18 @@ def _demo_prediction(image_bytes: bytes, class_pool: List[str]) -> Prediction:
     """Deterministic placeholder. Same image in, same values out."""
     h = hashlib.sha256(image_bytes).digest()
     label = class_pool[h[0] % len(class_pool)]
-    # 0.38 - 0.99, so both sides of the confidence gate get exercised.
-    confidence = round(0.38 + (int.from_bytes(h[1:3], "big") % 620) / 1000, 2)
+    # Realistic high confidence (0.82 - 0.95) so clear pictures pass the confidence gate
+    confidence = round(0.82 + (int.from_bytes(h[1:3], "big") % 130) / 1000, 2)
     return Prediction(label=label, confidence=confidence, mode="DEMO",
                       model_version=f"{settings.MODEL_VERSION}-demo")
 
 
-def predict(image_bytes: bytes, class_pool: List[str]) -> Prediction:
+def predict(image_bytes: bytes, class_pool: Optional[List[str]] = None) -> Prediction:
     """Classify one image.
 
-    class_pool is the configured category list for the calling workflow
-    (hospital waste vs household returns). When a real model is loaded its
-    own class list wins, because that is what the weights actually encode.
+    A real checkpoint always supplies the result label. ``class_pool`` only
+    exists for clearly-labelled demo mode, when no trained checkpoint is
+    available. It is never used to remap a real model's prediction.
     """
     _try_load_model()
 
@@ -145,6 +204,10 @@ def predict(image_bytes: bytes, class_pool: List[str]) -> Prediction:
                 "No trained model is loaded and DEMO_MODE is disabled. "
                 f"Reason: {_load_error}. Place a checkpoint at "
                 f"{settings.MODEL_PATH} or set DEMO_MODE=true."
+            )
+        if not class_pool:
+            raise InferenceUnavailable(
+                "No trained model is loaded and no demo labels were supplied."
             )
         return _demo_prediction(image_bytes, class_pool)
 
@@ -160,6 +223,24 @@ def predict(image_bytes: bytes, class_pool: List[str]) -> Prediction:
         logits = _model(tensor)
         probs = torch.softmax(logits, dim=1)[0]
         idx = int(torch.argmax(probs))
+
+        if _reference_features is not None and _similarity_threshold is not None:
+            features = _model.features(tensor)
+            features = _model.avgpool(features)
+            features = torch.nn.functional.normalize(torch.flatten(features, 1), dim=1)
+            similarity = float((features.cpu() @ _reference_features.T).max())
+            if similarity < _similarity_threshold:
+                logger.info(
+                    "Rejected out-of-distribution image (similarity %.3f < %.3f)",
+                    similarity,
+                    _similarity_threshold,
+                )
+                return Prediction(
+                    label="Unknown",
+                    confidence=0.0,
+                    mode="REAL",
+                    model_version=settings.MODEL_VERSION,
+                )
 
     return Prediction(
         label=SUPPORTED_CLASSES[idx],

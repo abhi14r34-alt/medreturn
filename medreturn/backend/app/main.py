@@ -91,6 +91,12 @@ def health() -> dict:
 
 @app.on_event("startup")
 def on_startup() -> None:
+    try:
+        from app.db.init_db import init_db
+        init_db()
+    except Exception as exc:
+        logger.warning("init_db on startup encountered: %s", exc)
+
     state = inference.model_status()
     if state["mode"] == "DEMO":
         logger.warning(
